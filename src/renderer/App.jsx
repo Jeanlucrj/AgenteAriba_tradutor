@@ -35,6 +35,7 @@ export default function App() {
   const [chunksSent, setChunksSent] = useState(0);
   const [deepgramStats, setDeepgramStats] = useState({ results: 0, nonEmpty: 0, lastText: '' });
   const [isTesting, setIsTesting] = useState(false);
+  const [translatorEngine, setTranslatorEngine] = useState('');
   const [isPanelOpen, setIsPanelOpen] = useState(false);
   const [aribaAnalysis, setAribaAnalysis] = useState(null);
   const [isAnalyzing, setIsAnalyzing] = useState(false);
@@ -373,7 +374,9 @@ export default function App() {
                 resetSubtitleTimer();
               } else {
                 try {
-                  const translated = await window.api.translateText(transcript, targetLang, contextWindowRef.current, sourceLang);
+                  const res = await window.api.translateText(transcript, targetLang, contextWindowRef.current, sourceLang);
+                  const translated = res?.text ?? res;
+                  if (res?.engine) setTranslatorEngine(res.engine);
                   setCache(transcript, targetLang, translated);
                   setFinalTranslation(translated);
                   contextWindowRef.current = [...contextWindowRef.current, translated].slice(-3);
@@ -410,7 +413,7 @@ export default function App() {
                   isTranslatingInterimRef.current = true;
                   lastInterimTranslateTimeRef.current = now;
                   window.api.translateText(transcript, targetLang, contextWindowRef.current, sourceLang)
-                    .then(t => { setCache(transcript, targetLang, t); setInterimTranslation(t); })
+                    .then(r => { const t = r?.text ?? r; if (r?.engine) setTranslatorEngine(r.engine); setCache(transcript, targetLang, t); setInterimTranslation(t); })
                     .catch(e => console.error('Erro tradução interim:', e.message))
                     .finally(() => { isTranslatingInterimRef.current = false; });
                 }
@@ -519,7 +522,9 @@ export default function App() {
     setOriginalText(testPhrase);
     setFinalTranslation('');
     try {
-      const translated = await window.api.translateText(testPhrase, targetLang);
+      const res = await window.api.translateText(testPhrase, targetLang);
+      const translated = res?.text ?? res;
+      if (res?.engine) setTranslatorEngine(res.engine);
       setFinalTranslation(translated);
       resetSubtitleTimer();
     } catch (e) {
@@ -749,6 +754,14 @@ export default function App() {
           <span className={deepgramStats.nonEmpty > 0 ? 'text-emerald-400' : 'text-slate-500'}>
             {deepgramStats.nonEmpty} com fala
           </span>
+          {translatorEngine && (
+            <>
+              {' '}•{' '}
+              <span className={translatorEngine === 'DeepL' ? 'text-blue-400 font-bold' : 'text-amber-400'}>
+                {translatorEngine === 'DeepL' ? '⚡ DeepL' : '✦ Gemini'}
+              </span>
+            </>
+          )}
           {deepgramStats.lastText ? (
             <> • último: "<span className="text-amber-300">{deepgramStats.lastText.slice(0, 80)}</span>"</>
           ) : deepgramStats.results > 5 ? (

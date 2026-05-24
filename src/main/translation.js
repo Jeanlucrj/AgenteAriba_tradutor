@@ -105,8 +105,7 @@ async function translateText(text, targetLang = 'Português', context = [], sour
   try {
     const result = await translateWithDeepL(text, targetLang, sourceLang);
     if (result) {
-      console.log(`[Tradução] DeepL: "${text.slice(0, 40)}..." → "${result.slice(0, 40)}..."`);
-      return result;
+      return { text: result, engine: 'DeepL' };
     }
   } catch (e) {
     console.warn(`[Tradução] DeepL falhou (${e.message}) — usando Gemini`);
@@ -115,8 +114,7 @@ async function translateText(text, targetLang = 'Português', context = [], sour
   // 2. Fallback: Gemini
   try {
     const result = await translateWithGemini(text, targetLang, context);
-    console.log(`[Tradução] Gemini (fallback): "${text.slice(0, 40)}..."`);
-    return result;
+    return { text: result, engine: 'Gemini' };
   } catch (e) {
     console.error('Erro na tradução:', e.message);
     throw new Error(`Tradução falhou: ${e.message}`);
