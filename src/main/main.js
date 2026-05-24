@@ -1,4 +1,4 @@
-const { app, BrowserWindow, ipcMain, desktopCapturer, screen, session, dialog } = require('electron');
+const { app, BrowserWindow, ipcMain, desktopCapturer, screen, session, dialog, net } = require('electron');
 const fs = require('fs');
 const path = require('path');
 const dotenv = require('dotenv');
@@ -119,11 +119,45 @@ ipcMain.handle('get-audio-sources', async () => {
   }
 });
 
+const DEEPL_LANG_MAP = { 'Português':'PT-BR','English':'EN-US','Español':'ES','French':'FR','German':'DE','Italian':'IT' };
+const DEEPL_SOURCE_MAP = { 'en':'EN','pt':'PT','es':'ES','fr':'FR','de':'DE','it':'IT','zh':'ZH','ja':'JA','auto':null };
+
+async function deepLTranslate(text, targetLang, sourceLang) {
+  const apiKey = (process.env.DEEPL_API_KEY || '').trim();
+  if (!apiKey || apiKey.toLowerCase().includes('your_')) return null;
+  const targetCode = DEEPL_LANG_MAP[targetLang];
+  if (!targetCode) return null;
+  const sourceCode = DEEPL_SOURCE_MAP[sourceLang] || null;
+  const url = apiKey.includes(':fx')
+    ? 'https://api-free.deepl.com/v2/translate'
+    : 'https://api.deepl.com/v2/translate';
+  const body = { text: [text], target_lang: targetCode };
+  if (sourceCode) body.source_lang = sourceCode;
+  // net.fetch é o método oficial do Electron para HTTP no main process
+  const res = await net.fetch(url, {
+    method: 'POST',
+    headers: { 'Authorization': `DeepL-Auth-Key ${apiKey}`, 'Content-Type': 'application/json' },
+    body: JSON.stringify(body),
+  });
+  if (!res.ok) throw new Error(`DeepL HTTP ${res.status}`);
+  const data = await res.json();
+  return data.translations?.[0]?.text?.trim() || null;
+}
+
 // IPC: Tradução
 ipcMain.handle('translate-text', async (event, text, targetLang, context = [], sourceLang = 'auto') => {
   try {
+    const deepLResult = await deepLTranslate(text, targetLang, sourceLang);
+    if (deepLResult) {
+      console.log(`[Tradução] DeepL: "${text.slice(0, 40)}" → "${deepLResult.slice(0, 40)}"`);
+      return { text: deepLResult, engine: 'DeepL' };
+    }
+  } catch (e) {
+    console.warn(`[DeepL] Falhou: ${e.message} — usando Gemini`);
+  }
+  try {
     const { text: translated, engine } = await translateText(text, targetLang, context, sourceLang);
-    console.log(`[Tradução] ${engine}: "${text.slice(0, 50)}" → "${translated.slice(0, 50)}"`);
+    console.log(`[Tradução] ${engine}: "${text.slice(0, 40)}" → "${translated.slice(0, 40)}"`);
     return { text: translated, engine };
   } catch (error) {
     console.error('Erro de tradução:', error);
