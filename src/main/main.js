@@ -83,6 +83,14 @@ app.whenReady().then(() => {
   cachedBrainContext = loadBrainContext();
   console.log(`[Brain] Contexto inicial: ${cachedBrainContext.length} caracteres`);
 
+  // Diagnóstico de chaves de API no startup
+  const deepLKey = process.env.DEEPL_API_KEY;
+  if (deepLKey && !deepLKey.includes('your_')) {
+    console.log(`[DeepL] Chave configurada — plano: ${deepLKey.endsWith(':fx') ? 'FREE (api-free.deepl.com)' : 'PRO (api.deepl.com)'}`);
+  } else {
+    console.warn('[DeepL] Chave NÃO configurada — traduções usarão Gemini');
+  }
+
   app.on('activate', () => {
     if (BrowserWindow.getAllWindows().length === 0) createOverlayWindow();
   });

@@ -16,19 +16,28 @@ const DEEPL_SOURCE_MAP = {
 
 async function translateWithDeepL(text, targetLang, sourceLang) {
   const apiKey = process.env.DEEPL_API_KEY;
-  if (!apiKey || apiKey.includes('your_')) return null;
+  if (!apiKey || apiKey.includes('your_')) {
+    console.warn('[DeepL] Chave não configurada — DEEPL_API_KEY ausente ou placeholder');
+    return null;
+  }
 
   const targetCode = DEEPL_LANG_MAP[targetLang];
-  if (!targetCode) return null;
+  if (!targetCode) {
+    console.warn(`[DeepL] Idioma destino não mapeado: "${targetLang}"`);
+    return null;
+  }
 
   // Chave ":fx" = plano Free → endpoint diferente
-  const baseUrl = apiKey.endsWith(':fx')
+  const isFree = apiKey.endsWith(':fx');
+  const baseUrl = isFree
     ? 'https://api-free.deepl.com/v2/translate'
     : 'https://api.deepl.com/v2/translate';
 
   const body = { text: [text], target_lang: targetCode };
   const sourceCode = DEEPL_SOURCE_MAP[sourceLang];
   if (sourceCode) body.source_lang = sourceCode;
+
+  console.log(`[DeepL] Chamando ${isFree ? 'FREE' : 'PRO'} → ${targetCode}${sourceCode ? ` de ${sourceCode}` : ''}`);
 
   const res = await fetch(baseUrl, {
     method: 'POST',
@@ -41,11 +50,13 @@ async function translateWithDeepL(text, targetLang, sourceLang) {
 
   if (!res.ok) {
     const err = await res.text().catch(() => '');
-    throw new Error(`DeepL HTTP ${res.status}: ${err.slice(0, 120)}`);
+    throw new Error(`DeepL HTTP ${res.status}: ${err.slice(0, 200)}`);
   }
 
   const data = await res.json();
-  return data.translations?.[0]?.text?.trim() || null;
+  const translated = data.translations?.[0]?.text?.trim();
+  if (!translated) throw new Error('DeepL retornou resposta vazia');
+  return translated;
 }
 
 async function translateWithGemini(text, targetLang, context = []) {
