@@ -113,7 +113,7 @@ async function translateWithGemini(text, targetLang, context = []) {
 async function translateText(text, targetLang = 'Português', context = [], sourceLang = 'auto') {
   if (!text || !text.trim()) return '';
 
-  // 1. Tenta DeepL (mais rápido, gratuito até 500K chars/mês)
+  // 1. Tenta DeepL (mais rápido, gratuito até 1 milhão de chars/mês no plano Free)
   try {
     const result = await translateWithDeepL(text, targetLang, sourceLang);
     if (result) {
