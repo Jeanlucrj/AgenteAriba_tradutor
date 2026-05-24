@@ -7,7 +7,7 @@ contextBridge.exposeInMainWorld('api', {
     console.log('getAudioSources called from preload');
     return ipcRenderer.invoke('get-audio-sources');
   },
-  translateText: (text, targetLang, context) => ipcRenderer.invoke('translate-text', text, targetLang, context),
+  translateText: (text, targetLang, context, sourceLang) => ipcRenderer.invoke('translate-text', text, targetLang, context, sourceLang),
   setIgnoreMouse: (ignore, options) => ipcRenderer.send('set-ignore-mouse-events', ignore, options),
   moveWindow: (dx, dy) => ipcRenderer.send('move-window', dx, dy),
   getDeepgramKey: () => ipcRenderer.invoke('get-deepgram-key'),

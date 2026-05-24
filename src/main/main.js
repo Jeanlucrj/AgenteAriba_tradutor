@@ -112,9 +112,9 @@ ipcMain.handle('get-audio-sources', async () => {
 });
 
 // IPC: Tradução
-ipcMain.handle('translate-text', async (event, text, targetLang, context = []) => {
+ipcMain.handle('translate-text', async (event, text, targetLang, context = [], sourceLang = 'auto') => {
   try {
-    const result = await translateText(text, targetLang, context);
+    const result = await translateText(text, targetLang, context, sourceLang);
     console.log(`[Tradução] "${text}" → "${result}"`);
     return result;
   } catch (error) {

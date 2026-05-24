@@ -373,7 +373,7 @@ export default function App() {
                 resetSubtitleTimer();
               } else {
                 try {
-                  const translated = await window.api.translateText(transcript, targetLang, contextWindowRef.current);
+                  const translated = await window.api.translateText(transcript, targetLang, contextWindowRef.current, sourceLang);
                   setCache(transcript, targetLang, translated);
                   setFinalTranslation(translated);
                   contextWindowRef.current = [...contextWindowRef.current, translated].slice(-3);
@@ -409,7 +409,7 @@ export default function App() {
                 } else {
                   isTranslatingInterimRef.current = true;
                   lastInterimTranslateTimeRef.current = now;
-                  window.api.translateText(transcript, targetLang, contextWindowRef.current)
+                  window.api.translateText(transcript, targetLang, contextWindowRef.current, sourceLang)
                     .then(t => { setCache(transcript, targetLang, t); setInterimTranslation(t); })
                     .catch(e => console.error('Erro tradução interim:', e.message))
                     .finally(() => { isTranslatingInterimRef.current = false; });
