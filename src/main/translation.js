@@ -38,25 +38,44 @@ async function translateWithDeepL(text, targetLang, sourceLang) {
   const sourceCode = DEEPL_SOURCE_MAP[sourceLang];
   if (sourceCode) body.source_lang = sourceCode;
 
-  console.log(`[DeepL] → ${baseUrl.includes('free') ? 'FREE' : 'PRO'} | target: ${targetCode}`);
+  const plan = baseUrl.includes('free') ? 'FREE' : 'PRO';
+  console.log(`[DeepL] → ${plan} | target: ${targetCode}`);
 
-  const res = await fetch(baseUrl, {
-    method: 'POST',
-    headers: {
-      'Authorization': `DeepL-Auth-Key ${apiKey}`,
-      'Content-Type': 'application/json',
-    },
-    body: JSON.stringify(body),
+  // Usa https do Node (mais confiável que fetch no processo principal do Electron)
+  const https = require('https');
+  const payload = JSON.stringify(body);
+  const urlObj = new URL(baseUrl);
+
+  const responseText = await new Promise((resolve, reject) => {
+    const req = https.request({
+      hostname: urlObj.hostname,
+      path: urlObj.pathname,
+      method: 'POST',
+      headers: {
+        'Authorization': `DeepL-Auth-Key ${apiKey}`,
+        'Content-Type': 'application/json',
+        'Content-Length': Buffer.byteLength(payload),
+      },
+    }, (res) => {
+      let data = '';
+      res.on('data', chunk => data += chunk);
+      res.on('end', () => {
+        if (res.statusCode !== 200) {
+          reject(new Error(`DeepL HTTP ${res.statusCode}: ${data.slice(0, 200)}`));
+        } else {
+          resolve(data);
+        }
+      });
+    });
+    req.on('error', reject);
+    req.write(payload);
+    req.end();
   });
 
-  if (!res.ok) {
-    const err = await res.text().catch(() => '');
-    throw new Error(`DeepL HTTP ${res.status}: ${err.slice(0, 200)}`);
-  }
-
-  const data = await res.json();
-  const translated = data.translations?.[0]?.text?.trim();
+  const parsed = JSON.parse(responseText);
+  const translated = parsed.translations?.[0]?.text?.trim();
   if (!translated) throw new Error('DeepL retornou resposta vazia');
+  console.log(`[DeepL] ✅ OK: "${translated.slice(0, 50)}"`);
   return translated;
 }
 
