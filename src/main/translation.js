@@ -15,7 +15,6 @@ const DEEPL_SOURCE_MAP = {
 };
 
 async function translateWithDeepL(text, targetLang, sourceLang) {
-  // trim() remove \r invisível que o Windows pode adicionar nas linhas do .env
   const apiKey = (process.env.DEEPL_API_KEY || '').trim();
   if (!apiKey || apiKey.toLowerCase().includes('your_')) {
     console.warn('[DeepL] Chave não configurada');
@@ -28,54 +27,16 @@ async function translateWithDeepL(text, targetLang, sourceLang) {
     return null;
   }
 
-  // includes(':fx') em vez de endsWith — protege contra \r no final
-  const isFree = apiKey.includes(':fx');
-  const baseUrl = isFree
-    ? 'https://api-free.deepl.com/v2/translate'
-    : 'https://api.deepl.com/v2/translate';
+  const sourceCode = DEEPL_SOURCE_MAP[sourceLang] || null;
+  console.log(`[DeepL] → target: ${targetCode}${sourceCode ? ` de ${sourceCode}` : ''}`);
 
-  const body = { text: [text], target_lang: targetCode };
-  const sourceCode = DEEPL_SOURCE_MAP[sourceLang];
-  if (sourceCode) body.source_lang = sourceCode;
-
-  const plan = baseUrl.includes('free') ? 'FREE' : 'PRO';
-  console.log(`[DeepL] → ${plan} | target: ${targetCode}`);
-
-  // Usa https do Node (mais confiável que fetch no processo principal do Electron)
-  const https = require('https');
-  const payload = JSON.stringify(body);
-  const urlObj = new URL(baseUrl);
-
-  const responseText = await new Promise((resolve, reject) => {
-    const req = https.request({
-      hostname: urlObj.hostname,
-      path: urlObj.pathname,
-      method: 'POST',
-      headers: {
-        'Authorization': `DeepL-Auth-Key ${apiKey}`,
-        'Content-Type': 'application/json',
-        'Content-Length': Buffer.byteLength(payload),
-      },
-    }, (res) => {
-      let data = '';
-      res.on('data', chunk => data += chunk);
-      res.on('end', () => {
-        if (res.statusCode !== 200) {
-          reject(new Error(`DeepL HTTP ${res.statusCode}: ${data.slice(0, 200)}`));
-        } else {
-          resolve(data);
-        }
-      });
-    });
-    req.on('error', reject);
-    req.write(payload);
-    req.end();
-  });
-
-  const parsed = JSON.parse(responseText);
-  const translated = parsed.translations?.[0]?.text?.trim();
+  // SDK oficial deepl-node — mais confiável que fetch direto no Electron
+  const deepl = require('deepl-node');
+  const client = new deepl.DeepLClient(apiKey);
+  const result = await client.translateText(text, sourceCode, targetCode);
+  const translated = result.text?.trim();
   if (!translated) throw new Error('DeepL retornou resposta vazia');
-  console.log(`[DeepL] ✅ OK: "${translated.slice(0, 50)}"`);
+  console.log(`[DeepL] ✅ "${translated.slice(0, 60)}"`);
   return translated;
 }
 
