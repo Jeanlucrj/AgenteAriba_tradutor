@@ -1,4 +1,5 @@
-const { app, BrowserWindow, ipcMain, desktopCapturer, screen, session } = require('electron');
+const { app, BrowserWindow, ipcMain, desktopCapturer, screen, session, dialog } = require('electron');
+const fs = require('fs');
 const path = require('path');
 const dotenv = require('dotenv');
 
@@ -7,6 +8,11 @@ dotenv.config();
 
 const { translateText } = require('./translation');
 const { analyzeConversation } = require('./ariba');
+const { startMeeting, saveTurn, endMeeting, getMeetings, getTurns } = require('./database');
+const { generateMeetingSummary, saveMeetingSummary, loadBrainContext, extractAndLearnKnowledge } = require('./brain');
+const { addFileToBrain, listBrainFiles, deleteBrainFile, loadSmartContext } = require('./brainManager');
+
+let cachedBrainContext = '';
 const WebSocket = require('ws');
 
 let mainWindow;
@@ -74,6 +80,8 @@ app.whenReady().then(() => {
   });
 
   createOverlayWindow();
+  cachedBrainContext = loadBrainContext();
+  console.log(`[Brain] Contexto inicial: ${cachedBrainContext.length} caracteres`);
 
   app.on('activate', () => {
     if (BrowserWindow.getAllWindows().length === 0) createOverlayWindow();
@@ -123,8 +131,172 @@ ipcMain.on('set-ignore-mouse-events', (event, ignore, options) => {
 ipcMain.handle('get-deepgram-key', () => process.env.DEEPGRAM_API_KEY || '');
 ipcMain.on('close-app', () => app.quit());
 
-ipcMain.handle('analyze-ariba', async (_event, history) => {
-  return await analyzeConversation(history);
+ipcMain.handle('analyze-ariba', async (_event, history, frames) => {
+  // Extrai keywords da conversa para seleção inteligente de contexto
+  const recentText = (history || []).slice(-8).join(' ');
+  const keywords = recentText
+    .split(/\s+/)
+    .filter(w => w.length >= 5)
+    .map(w => w.toLowerCase().replace(/[^a-záéíóúãõâêôçüà]/gi, ''));
+  const smartCtx = loadSmartContext([...new Set(keywords)]);
+  return await analyzeConversation(history, frames, smartCtx);
+});
+
+ipcMain.handle('brain-refresh-context', () => {
+  cachedBrainContext = loadBrainContext();
+  console.log(`[Brain] Contexto carregado: ${cachedBrainContext.length} caracteres`);
+  return cachedBrainContext.length;
+});
+
+ipcMain.handle('brain-generate-summary', async (_event, turns, sourceLang, targetLang) => {
+  try {
+    const [summary] = await Promise.all([
+      generateMeetingSummary(turns, sourceLang, targetLang),
+      extractAndLearnKnowledge(turns).catch(e => console.warn('[Brain] Aprendizado:', e.message))
+    ]);
+    if (summary) {
+      saveMeetingSummary(summary);
+      cachedBrainContext = loadBrainContext();
+      console.log('[Brain] Resumo gerado e contexto atualizado.');
+    }
+    return summary;
+  } catch (e) {
+    console.error('[Brain] Erro ao gerar resumo:', e.message);
+    return null;
+  }
+});
+
+ipcMain.handle('export-conversation', async (_event, meetingInfo, turns) => {
+  const { filePath, canceled } = await dialog.showSaveDialog({
+    title: 'Exportar Conversa',
+    defaultPath: `conversa_ariba_${meetingInfo.date.replace(/\//g, '-')}_${meetingInfo.time.replace(':', 'h')}.txt`,
+    filters: [{ name: 'Texto', extensions: ['txt'] }]
+  });
+  if (canceled || !filePath) return { success: false };
+
+  const lines = [
+    'AGENTE ARIBA SENIOR — HISTÓRICO DE CONVERSA',
+    '='.repeat(50),
+    `Sessão: ${meetingInfo.date} às ${meetingInfo.time}`,
+    `Duração: ${meetingInfo.duration}`,
+    `Idioma: ${meetingInfo.sourceLang} → ${meetingInfo.targetLang}`,
+    `Total de falas: ${meetingInfo.totalTurns} | Perguntas detectadas: ${meetingInfo.questions}`,
+    '='.repeat(50),
+    ''
+  ];
+
+  turns.forEach(t => {
+    const time = t.created_at ? new Date(t.created_at).toLocaleTimeString('pt-BR', { hour: '2-digit', minute: '2-digit' }) : '';
+    if (t.is_question) {
+      lines.push(`[${time}] ⚡ PERGUNTA DETECTADA`);
+      lines.push(`  "${t.original_text}"`);
+      if (t.suggested_response) {
+        lines.push(`  Resposta (EN): ${t.suggested_response}`);
+      }
+      if (t.suggested_response_pt) {
+        lines.push(`  Resposta (PT): ${t.suggested_response_pt}`);
+      }
+      if (t.key_points?.length) {
+        lines.push(`  Tópicos: ${t.key_points.join(', ')}`);
+      }
+    } else {
+      lines.push(`[${time}] ${t.original_text}`);
+      if (t.translated_text) lines.push(`       > ${t.translated_text}`);
+    }
+    lines.push('');
+  });
+
+  fs.writeFileSync(filePath, lines.join('\n'), 'utf-8');
+  return { success: true, filePath };
+});
+
+ipcMain.handle('db-start-meeting', async (_event, sourceLang, targetLang) => {
+  return await startMeeting(sourceLang, targetLang);
+});
+
+ipcMain.handle('db-save-turn', async (_event, meetingId, turn) => {
+  await saveTurn(meetingId, turn);
+});
+
+ipcMain.handle('db-end-meeting', async (_event, meetingId) => {
+  await endMeeting(meetingId);
+});
+
+ipcMain.handle('db-get-meetings', async () => {
+  return await getMeetings();
+});
+
+ipcMain.handle('db-get-turns', async (_event, meetingId) => {
+  return await getTurns(meetingId);
+});
+
+// Brain Manager IPC
+ipcMain.handle('brain-list-files', () => listBrainFiles());
+
+ipcMain.handle('brain-add-file', async () => {
+  const { filePath, canceled } = await dialog.showOpenDialog({
+    title: 'Adicionar ao Cérebro',
+    filters: [{ name: 'Documentos', extensions: ['pdf', 'docx', 'txt', 'md'] }],
+    properties: ['openFile']
+  });
+  if (canceled || !filePath?.[0]) return { canceled: true };
+  try {
+    const result = await addFileToBrain(filePath[0]);
+    cachedBrainContext = loadBrainContext();
+    return result;
+  } catch (e) {
+    console.error('[Brain] Erro ao adicionar arquivo:', e.message);
+    return { error: e.message };
+  }
+});
+
+ipcMain.handle('brain-delete-file', (_event, filename) => {
+  const ok = deleteBrainFile(filename);
+  if (ok) cachedBrainContext = loadBrainContext();
+  return ok;
+});
+
+ipcMain.on('open-brain-window', () => {
+  const { width: sw, height: sh } = screen.getPrimaryDisplay().bounds;
+  const w = Math.min(900, sw - 80);
+  const h = Math.min(700, sh - 80);
+  const win = new BrowserWindow({
+    width: w, height: h,
+    x: Math.floor((sw - w) / 2), y: Math.floor((sh - h) / 2),
+    title: 'Cérebro do Agente — Conhecimento',
+    backgroundColor: '#020617',
+    webPreferences: {
+      nodeIntegration: false,
+      contextIsolation: true,
+      preload: path.join(__dirname, 'preload.js'),
+    },
+  });
+  const isDev = process.env.NODE_ENV === 'development' || !app.isPackaged;
+  if (isDev) win.loadURL('http://127.0.0.1:5173/#brain');
+  else win.loadFile(path.join(__dirname, '../../dist/renderer/index.html'), { hash: 'brain' });
+});
+
+ipcMain.on('open-history-window', () => {
+  const { width: sw, height: sh } = screen.getPrimaryDisplay().bounds;
+  const w = Math.min(1200, sw - 80);
+  const h = Math.min(780, sh - 80);
+  const win = new BrowserWindow({
+    width: w, height: h,
+    x: Math.floor((sw - w) / 2), y: Math.floor((sh - h) / 2),
+    title: 'Histórico de Conversas — Agente Ariba',
+    backgroundColor: '#0f172a',
+    webPreferences: {
+      nodeIntegration: false,
+      contextIsolation: true,
+      preload: path.join(__dirname, 'preload.js'),
+    },
+  });
+  const isDev = process.env.NODE_ENV === 'development' || !app.isPackaged;
+  if (isDev) {
+    win.loadURL('http://127.0.0.1:5173/#history');
+  } else {
+    win.loadFile(path.join(__dirname, '../../dist/renderer/index.html'), { hash: 'history' });
+  }
 });
 
 ipcMain.on('set-window-height', (_event, height) => {
@@ -140,6 +312,12 @@ ipcMain.on('set-window-height', (_event, height) => {
 });
 ipcMain.on('log-to-main', (event, type, text) => {
   console.log(`[Renderer ${type.toUpperCase()}] ${text}`);
+});
+
+ipcMain.on('move-window', (_event, dx, dy) => {
+  if (!mainWindow) return;
+  const [x, y] = mainWindow.getPosition();
+  mainWindow.setPosition(x + Math.round(dx), y + Math.round(dy));
 });
 
 // ==========================================

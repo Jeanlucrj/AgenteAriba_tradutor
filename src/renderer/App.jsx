@@ -41,6 +41,10 @@ export default function App() {
   const conversationHistoryRef = useRef([]);
   const isPanelOpenRef = useRef(false);
   const analysisDebounceRef = useRef(null);
+  const meetingIdRef = useRef(null);
+  const frameBufferRef = useRef([]);
+  const frameBufferIntervalRef = useRef(null);
+  const dragStartRef = useRef(null);
 
   // Bridge de log para o terminal do Electron
   useEffect(() => {
@@ -62,21 +66,55 @@ export default function App() {
   useEffect(() => { isRecordingRef.current = isRecording; }, [isRecording]);
   useEffect(() => { isPanelOpenRef.current = isPanelOpen; }, [isPanelOpen]);
 
+  // Captura um frame da tela atual (via stream de vídeo já ativo) para contexto visual
+  const captureScreenFrame = useCallback(() => {
+    const video = hiddenVideoRef.current;
+    if (!video || !video.videoWidth || !videoStreamRef.current) return null;
+    try {
+      const canvas = document.createElement('canvas');
+      canvas.width  = Math.floor(video.videoWidth  * 0.5);
+      canvas.height = Math.floor(video.videoHeight * 0.5);
+      canvas.getContext('2d').drawImage(video, 0, 0, canvas.width, canvas.height);
+      return canvas.toDataURL('image/jpeg', 0.65).split(',')[1]; // base64 sem prefixo
+    } catch (e) {
+      console.warn('Falha ao capturar frame da tela:', e.message);
+      return null;
+    }
+  }, []);
+
   const triggerAnalysis = useCallback((history) => {
     if (analysisDebounceRef.current) clearTimeout(analysisDebounceRef.current);
     analysisDebounceRef.current = setTimeout(async () => {
       if (!isPanelOpenRef.current || history.length === 0) return;
       setIsAnalyzing(true);
+      // Captura frame atual + buffer dos últimos 15-45s (contexto temporal para slides/vídeos)
+      const currentFrame = captureScreenFrame();
+      const frames = currentFrame
+        ? [...frameBufferRef.current, currentFrame].slice(-4)
+        : [...frameBufferRef.current];
+      if (frames.length > 0) console.log(`📸 ${frames.length} frame(s) capturados para contexto Ariba`);
       try {
-        const result = await window.api.analyzeAriba(history);
-        if (result) setAribaAnalysis(result);
+        const result = await window.api.analyzeAriba(history, frames);
+        if (result) {
+          setAribaAnalysis(result);
+          if (result.isQuestion && meetingIdRef.current) {
+            window.api.dbSaveTurn(meetingIdRef.current, {
+              originalText: result.question || history[history.length - 1] || '',
+              translatedText: null,
+              isQuestion: true,
+              suggestedResponse: result.suggestedResponse || null,
+              suggestedResponsePT: result.suggestedResponsePT || null,
+              keyPoints: result.keyPoints || [],
+            }).catch(e => console.error('[DB] Falha ao salvar análise:', e.message));
+          }
+        }
       } catch (e) {
         console.error('Erro análise Ariba:', e.message);
       } finally {
         setIsAnalyzing(false);
       }
     }, 2000);
-  }, []);
+  }, [captureScreenFrame]);
 
   // Inicializa (ou reinicializa) o analisador de volume em tempo real
   const initVolumeAnalyzer = useCallback((audioStream) => {
@@ -208,6 +246,8 @@ export default function App() {
     }
     if (unsubscribeTranscriptionRef.current) { unsubscribeTranscriptionRef.current(); unsubscribeTranscriptionRef.current = null; }
     if (unsubscribeErrorRef.current) { unsubscribeErrorRef.current(); unsubscribeErrorRef.current = null; }
+    if (frameBufferIntervalRef.current) { clearInterval(frameBufferIntervalRef.current); frameBufferIntervalRef.current = null; }
+    frameBufferRef.current = [];
     await window.api.stopDeepgram();
 
     setChunksSent(0);
@@ -269,12 +309,29 @@ export default function App() {
           hiddenVideoRef.current.srcObject = stream;
           hiddenVideoRef.current.play().catch(e => console.warn('Vídeo oculto:', e.message));
         }
+
+        // Buffer silencioso: captura 1 frame a cada 15s para contexto temporal (slides/vídeos)
+        // Não chama Gemini — apenas guarda em memória até a próxima análise ser disparada
+        frameBufferIntervalRef.current = setInterval(() => {
+          const f = captureScreenFrame();
+          if (f) frameBufferRef.current = [...frameBufferRef.current, f].slice(-3);
+        }, 15000);
       }
 
       // Conecta ao Deepgram via IPC do Main Process (servidor seguro Node)
       await window.api.startDeepgram(sourceLang);
       setStatus('listening');
       setIsRecording(true);
+
+      // Inicia sessão no banco de dados (fire-and-forget, não bloqueia)
+      window.api.dbStartMeeting(sourceLang, targetLang)
+        .then(id => { meetingIdRef.current = id; })
+        .catch(e => console.error('[DB] Falha ao iniciar sessão:', e.message));
+
+      // Carrega cérebro do agente — memória das reuniões anteriores
+      window.api.brainRefreshContext()
+        .then(size => console.log(`[Brain] ${size} caracteres carregados no contexto`))
+        .catch(e => console.error('[Brain] Falha ao carregar contexto:', e.message));
 
       // Ouvinte de eventos de transcrição recebidos do Main
       unsubscribeTranscriptionRef.current = window.api.onTranscription(async (data) => {
@@ -323,6 +380,17 @@ export default function App() {
                   const updatedHistory = [...conversationHistoryRef.current, transcript].slice(-20);
                   conversationHistoryRef.current = updatedHistory;
                   triggerAnalysis(updatedHistory);
+                  // Salva turno no banco (fire-and-forget)
+                  if (meetingIdRef.current) {
+                    window.api.dbSaveTurn(meetingIdRef.current, {
+                      originalText: transcript,
+                      translatedText: translated,
+                      isQuestion: false,
+                      suggestedResponse: null,
+                      suggestedResponsePT: null,
+                      keyPoints: [],
+                    }).catch(e => console.error('[DB] Falha ao salvar turno:', e.message));
+                  }
                   resetSubtitleTimer();
                 } catch (te) {
                   console.error('Erro na tradução final:', te.message);
@@ -407,6 +475,23 @@ export default function App() {
   };
 
   const stopRecording = async () => {
+    const closingMeetingId = meetingIdRef.current;
+    if (closingMeetingId) {
+      window.api.dbEndMeeting(closingMeetingId)
+        .catch(e => console.error('[DB] Falha ao encerrar sessão:', e.message));
+
+      // Gera resumo da reunião e salva no cérebro do agente
+      window.api.dbGetTurns(closingMeetingId).then(turns => {
+        if (turns && turns.length > 0) {
+          console.log(`[Brain] Gerando resumo de ${turns.length} turnos...`);
+          return window.api.brainGenerateSummary(turns, sourceLang, targetLang);
+        }
+      }).then(summary => {
+        if (summary) console.log('[Brain] Resumo salvo com sucesso.');
+      }).catch(e => console.error('[Brain] Falha ao gerar resumo:', e.message));
+
+      meetingIdRef.current = null;
+    }
     await cleanupStreams();
     setStatus('disconnected');
     setIsRecording(false);
@@ -421,7 +506,7 @@ export default function App() {
     const newOpen = !isPanelOpen;
     setIsPanelOpen(newOpen);
     isPanelOpenRef.current = newOpen;
-    window.api.setWindowHeight(newOpen ? 460 : 200);
+    window.api.setWindowHeight(newOpen ? 380 : 200);
     if (newOpen && conversationHistoryRef.current.length > 0) {
       triggerAnalysis(conversationHistoryRef.current);
     }
@@ -468,6 +553,42 @@ export default function App() {
         onMouseLeave={() => window.api.setIgnoreMouse(true, { forward: true })}
       >
         <div className="flex items-center gap-3">
+          {/* Grip de arrastar */}
+          <div
+            className="flex items-center justify-center w-5 h-7 text-slate-600 hover:text-slate-300 flex-shrink-0 -ml-1 cursor-grab active:cursor-grabbing select-none"
+            title="Arrastar para mover o overlay"
+            onMouseEnter={() => window.api.setIgnoreMouse(false)}
+            onMouseDown={(e) => {
+              e.preventDefault();
+              window.api.setIgnoreMouse(false);
+              dragStartRef.current = { x: e.screenX, y: e.screenY };
+              const cleanup = () => {
+                dragStartRef.current = null;
+                window.removeEventListener('mousemove', onMove);
+                window.removeEventListener('mouseup', onUp);
+              };
+              const onMove = (ev) => {
+                // Se botão foi solto fora da janela, ev.buttons === 0 — limpa sem travar
+                if (ev.buttons === 0) { cleanup(); return; }
+                if (!dragStartRef.current) return;
+                const dx = ev.screenX - dragStartRef.current.x;
+                const dy = ev.screenY - dragStartRef.current.y;
+                dragStartRef.current = { x: ev.screenX, y: ev.screenY };
+                window.api.moveWindow(dx, dy);
+              };
+              const onUp = () => cleanup();
+              window.addEventListener('mousemove', onMove);
+              window.addEventListener('mouseup', onUp);
+            }}
+          >
+            <svg width="8" height="14" viewBox="0 0 8 14" fill="currentColor">
+              <circle cx="2" cy="2"  r="1.3"/><circle cx="6" cy="2"  r="1.3"/>
+              <circle cx="2" cy="6"  r="1.3"/><circle cx="6" cy="6"  r="1.3"/>
+              <circle cx="2" cy="10" r="1.3"/><circle cx="6" cy="10" r="1.3"/>
+              <circle cx="2" cy="14" r="1.3"/><circle cx="6" cy="14" r="1.3"/>
+            </svg>
+          </div>
+
           {/* Status dot */}
           <div className="flex items-center gap-2">
             <span className="flex h-3 w-3 relative">
@@ -567,6 +688,13 @@ export default function App() {
               {errorMsg}
             </span>
           )}
+          <button
+            onClick={() => window.api.openHistory()}
+            title="Ver histórico de conversas"
+            className="px-3 py-1 text-[10px] font-bold rounded-full bg-slate-700 hover:bg-slate-600 text-slate-300 hover:text-white transition-all cursor-pointer"
+          >
+            📋 Histórico
+          </button>
           <button
             onClick={togglePanel}
             disabled={!isRecording}
@@ -700,7 +828,7 @@ export default function App() {
       )}
 
       {/* Área das Legendas */}
-      <div className="flex-1 flex flex-col items-center justify-end pb-4 px-6 pointer-events-none">
+      <div className={`${isPanelOpen ? 'mt-1 pb-2' : 'flex-1 justify-end pb-4'} flex flex-col items-center px-6 pointer-events-none`}>
         {displayTranslation && (
           <div className="flex flex-col items-center max-w-[90%] text-center select-text">
             <div

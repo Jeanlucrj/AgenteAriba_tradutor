@@ -18,6 +18,11 @@ release/
 *.log
 npm-debug.log*
 
+# Cérebro do agente — reuniões e inbox são privados, knowledge é versionado
+brain/meetings/
+brain/inbox/
+brain/processed/
+
 # Sistema operacional
 .DS_Store
 Thumbs.db
