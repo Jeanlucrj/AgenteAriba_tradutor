@@ -522,10 +522,19 @@ export default function App() {
     setOriginalText(testPhrase);
     setFinalTranslation('');
     try {
-      const res = await window.api.translateText(testPhrase, targetLang);
-      const translated = res?.text ?? res;
-      if (res?.engine) setTranslatorEngine(res.engine);
-      setFinalTranslation(translated);
+      // Testa DeepL primeiro diretamente
+      const deepLResult = await window.api.testDeepL();
+      if (deepLResult.ok) {
+        setTranslatorEngine('DeepL');
+        setFinalTranslation(`[DeepL ${deepLResult.plan}] ${deepLResult.translated}`);
+      } else {
+        setErrorMsg(`DeepL: ${deepLResult.error}`);
+        // Tenta Gemini como fallback
+        const res = await window.api.translateText(testPhrase, targetLang);
+        const translated = res?.text ?? res;
+        if (res?.engine) setTranslatorEngine(res.engine);
+        setFinalTranslation(translated);
+      }
       resetSubtitleTimer();
     } catch (e) {
       setErrorMsg(`Teste falhou: ${e.message}`);

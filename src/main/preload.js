@@ -41,5 +41,6 @@ contextBridge.exposeInMainWorld('api', {
   exportConversation: (meetingInfo, turns) => ipcRenderer.invoke('export-conversation', meetingInfo, turns),
   brainListFiles: () => ipcRenderer.invoke('brain-list-files'),
   brainAddFile: () => ipcRenderer.invoke('brain-add-file'),
-  brainDeleteFile: (filename) => ipcRenderer.invoke('brain-delete-file', filename)
+  brainDeleteFile: (filename) => ipcRenderer.invoke('brain-delete-file', filename),
+  testDeepL: () => ipcRenderer.invoke('test-deepl')
 });

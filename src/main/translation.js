@@ -15,20 +15,21 @@ const DEEPL_SOURCE_MAP = {
 };
 
 async function translateWithDeepL(text, targetLang, sourceLang) {
-  const apiKey = process.env.DEEPL_API_KEY;
-  if (!apiKey || apiKey.includes('your_')) {
-    console.warn('[DeepL] Chave não configurada — DEEPL_API_KEY ausente ou placeholder');
+  // trim() remove \r invisível que o Windows pode adicionar nas linhas do .env
+  const apiKey = (process.env.DEEPL_API_KEY || '').trim();
+  if (!apiKey || apiKey.toLowerCase().includes('your_')) {
+    console.warn('[DeepL] Chave não configurada');
     return null;
   }
 
   const targetCode = DEEPL_LANG_MAP[targetLang];
   if (!targetCode) {
-    console.warn(`[DeepL] Idioma destino não mapeado: "${targetLang}"`);
+    console.warn(`[DeepL] Idioma não mapeado: "${targetLang}"`);
     return null;
   }
 
-  // Chave ":fx" = plano Free → endpoint diferente
-  const isFree = apiKey.endsWith(':fx');
+  // includes(':fx') em vez de endsWith — protege contra \r no final
+  const isFree = apiKey.includes(':fx');
   const baseUrl = isFree
     ? 'https://api-free.deepl.com/v2/translate'
     : 'https://api.deepl.com/v2/translate';
@@ -37,7 +38,7 @@ async function translateWithDeepL(text, targetLang, sourceLang) {
   const sourceCode = DEEPL_SOURCE_MAP[sourceLang];
   if (sourceCode) body.source_lang = sourceCode;
 
-  console.log(`[DeepL] Chamando ${isFree ? 'FREE' : 'PRO'} → ${targetCode}${sourceCode ? ` de ${sourceCode}` : ''}`);
+  console.log(`[DeepL] → ${baseUrl.includes('free') ? 'FREE' : 'PRO'} | target: ${targetCode}`);
 
   const res = await fetch(baseUrl, {
     method: 'POST',

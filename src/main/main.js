@@ -137,6 +137,29 @@ ipcMain.on('set-ignore-mouse-events', (event, ignore, options) => {
 });
 
 ipcMain.handle('get-deepgram-key', () => process.env.DEEPGRAM_API_KEY || '');
+
+ipcMain.handle('test-deepl', async () => {
+  const apiKey = (process.env.DEEPL_API_KEY || '').trim();
+  if (!apiKey || apiKey.toLowerCase().includes('your_')) return { ok: false, error: 'DEEPL_API_KEY não configurada no .env' };
+  const isFree = apiKey.includes(':fx');
+  const url = isFree ? 'https://api-free.deepl.com/v2/translate' : 'https://api.deepl.com/v2/translate';
+  console.log(`[DeepL Test] chave: ...${apiKey.slice(-8)} | plano: ${isFree ? 'FREE' : 'PRO'} | url: ${url}`);
+  try {
+    const res = await fetch(url, {
+      method: 'POST',
+      headers: { 'Authorization': `DeepL-Auth-Key ${apiKey}`, 'Content-Type': 'application/json' },
+      body: JSON.stringify({ text: ['Hello, this is a test.'], target_lang: 'PT-BR' }),
+    });
+    const body = await res.text();
+    console.log(`[DeepL Test] HTTP ${res.status}: ${body.slice(0, 200)}`);
+    if (!res.ok) return { ok: false, error: `HTTP ${res.status}: ${body.slice(0, 100)}` };
+    const data = JSON.parse(body);
+    return { ok: true, translated: data.translations?.[0]?.text, plan: isFree ? 'FREE' : 'PRO' };
+  } catch (e) {
+    console.error('[DeepL Test] Erro:', e.message);
+    return { ok: false, error: e.message };
+  }
+});
 ipcMain.on('close-app', () => app.quit());
 
 ipcMain.handle('analyze-ariba', async (_event, history, frames) => {
